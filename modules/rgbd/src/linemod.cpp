@@ -1166,8 +1166,11 @@ static void similarity(const std::vector<Mat>& linear_memories, const Template& 
   // 63 features or less is a special case because the max similarity per-feature is 4.
   // 255/4 = 63, so up to that many we can add up similarities in 8 bits without worrying
   // about overflow. Therefore here we use _mm_add_epi8 as the workhorse, whereas a more
-  // general function would use _mm_add_epi16.
-  CV_Assert(templ.features.size() <= 63);
+  // general function would use _mm_add_epi16.  
+  //ALEX[[[
+  // CV_Assert(templ.features.size() <= 63);
+  CV_Assert(templ.features.size() <= 8191);
+  //]]]ALEX
   /// @todo Handle more than 255/MAX_RESPONSE features!!
 
   // Decimate input image size by factor of T
@@ -1190,8 +1193,12 @@ static void similarity(const std::vector<Mat>& linear_memories, const Template& 
 
   /// @todo In old code, dst is buffer of size m_U. Could make it something like
   /// (span_x)x(span_y) instead?
-  dst = Mat::zeros(H, W, CV_8U);
-  uchar* dst_ptr = dst.ptr<uchar>();
+  //ALEX[[[
+  // dst = Mat::zeros(H, W, CV_8U);
+  // uchar* dst_ptr = dst.ptr<uchar>();
+  dst = Mat::zeros(H, W, CV_16U);
+  ushort* dst_ptr = dst.ptr<ushort>();
+  //]]]ALEX
 
 #if CV_SSE2
   volatile bool haveSSE2 = checkHardwareSupport(CV_CPU_SSE2);
@@ -1200,6 +1207,10 @@ static void similarity(const std::vector<Mat>& linear_memories, const Template& 
 #endif
 #endif
 
+  //ALEX[[[
+  haveSSE2 = false;
+  haveSSE3 = false;
+  //]]]ALEX
   // Compute the similarity measure for this template by accumulating the contribution of
   // each feature
   for (int i = 0; i < (int)templ.features.size(); ++i)
@@ -1241,8 +1252,12 @@ static void similarity(const std::vector<Mat>& linear_memories, const Template& 
       }
     }
 #endif
-    for ( ; j < template_positions; ++j)
-      dst_ptr[j] = uchar(dst_ptr[j] + lm_ptr[j]);
+    for ( ; j < template_positions; ++j) {
+      //ALEX[[[
+      // dst_ptr[j] = uchar(dst_ptr[j] + lm_ptr[j]);
+      dst_ptr[j] = ushort(dst_ptr[j] + lm_ptr[j]);
+      //]]]ALEX
+    }
   }
 }
 
@@ -1261,11 +1276,16 @@ static void similarityLocal(const std::vector<Mat>& linear_memories, const Templ
 {
   // Similar to whole-image similarity() above. This version takes a position 'center'
   // and computes the energy in the 16x16 patch centered on it.
-  CV_Assert(templ.features.size() <= 63);
-
+  //ALEX[[[
+  // CV_Assert(templ.features.size() <= 63);
+  CV_Assert(templ.features.size() <= 8191);
+  //]]]ALEX
   // Compute the similarity map in a 16x16 patch around center
   int W = size.width / T;
-  dst = Mat::zeros(16, 16, CV_8U);
+  //ALEX[[[
+  // dst = Mat::zeros(16, 16, CV_8U);
+  dst = Mat::zeros(16, 16, CV_16U);
+  //]]]ALEX
 
   // Offset each feature point by the requested center. Further adjust to (-8,-8) from the
   // center to get the top-left corner of the 16x16 patch.
@@ -1280,6 +1300,10 @@ static void similarityLocal(const std::vector<Mat>& linear_memories, const Templ
 #endif
   __m128i* dst_ptr_sse = dst.ptr<__m128i>();
 #endif
+  //ALEX[[[
+  haveSSE2 = false;
+  haveSSE3 = false;
+  //]]]ALEX
 
   for (int i = 0; i < (int)templ.features.size(); ++i)
   {
@@ -1320,11 +1344,18 @@ static void similarityLocal(const std::vector<Mat>& linear_memories, const Templ
     else
 #endif
     {
-      uchar* dst_ptr = dst.ptr<uchar>();
+      //ALEX[[[
+      // uchar* dst_ptr = dst.ptr<uchar>();
+      ushort* dst_ptr = dst.ptr<ushort>();
+      //]]]ALEX
       for (int row = 0; row < 16; ++row)
       {
-        for (int col = 0; col < 16; ++col)
-          dst_ptr[col] = uchar(dst_ptr[col] + lm_ptr[col]);
+        for (int col = 0; col < 16; ++col) {
+            //ALEX[[[
+            // dst_ptr[col] = uchar(dst_ptr[col] + lm_ptr[col]);
+            dst_ptr[col] = ushort(dst_ptr[col] + lm_ptr[col]);
+            //]]]ALEX
+        }
         dst_ptr += 16;
         lm_ptr += W;
       }
@@ -1346,6 +1377,22 @@ static void addUnaligned8u16u(const uchar * src1, const uchar * src2, ushort * r
   }
 }
 
+//ALEX[[[
+static void addUnaligned16u32s(const ushort* src1, const ushort* src2, int* res, int length)
+{
+    const ushort* end = src1 + length;
+
+    while (src1 != end)
+    {
+        *res = *src1 + *src2;
+
+        ++src1;
+        ++src2;
+        ++res;
+    }
+}
+//]]]ALEX
+
 /**
  * \brief Accumulate one or more 8-bit similarity images.
  *
@@ -1354,6 +1401,8 @@ static void addUnaligned8u16u(const uchar * src1, const uchar * src2, ushort * r
  */
 static void addSimilarities(const std::vector<Mat>& similarities, Mat& dst)
 {
+  //ALEX[[[
+  /*
   if (similarities.size() == 1)
   {
     similarities[0].convertTo(dst, CV_16U);
@@ -1368,6 +1417,19 @@ static void addSimilarities(const std::vector<Mat>& similarities, Mat& dst)
     for (size_t i = 2; i < similarities.size(); ++i)
       add(dst, similarities[i], dst, noArray(), CV_16U);
   }
+  */
+  if (similarities.size() == 1) {
+    similarities[0].convertTo(dst, CV_32S);
+  }
+  else {
+    dst.create(similarities[0].size(), CV_32S);
+    addUnaligned16u32s(similarities[0].ptr<ushort>(), similarities[1].ptr<ushort>(), dst.ptr<int>(), static_cast<int>(dst.total()));
+
+    /// @todo Optimize 16u + 8u -> 16u when more than 2 modalities
+    for (size_t i = 2; i < similarities.size(); ++i)
+      add(dst, similarities[i], dst, noArray(), CV_32S);
+  }
+  //]]]ALEX
 }
 
 /****************************************************************************************\
@@ -1517,7 +1579,10 @@ void Detector::matchClass(const LinearMemoryPyramid& lm_pyramid,
     std::vector<Match> candidates;
     for (int r = 0; r < total_similarity.rows; ++r)
     {
-      ushort* row = total_similarity.ptr<ushort>(r);
+      //ALEX[[[
+      // ushort* row = total_similarity.ptr<ushort>(r);
+      int* row = total_similarity.ptr<int>(r);
+      //]]]ALEX
       for (int c = 0; c < total_similarity.cols; ++c)
       {
         int raw_score = row[c];
@@ -1575,7 +1640,10 @@ void Detector::matchClass(const LinearMemoryPyramid& lm_pyramid,
         int best_r = -1, best_c = -1;
         for (int r = 0; r < total_similarity2.rows; ++r)
         {
-          ushort* row = total_similarity2.ptr<ushort>(r);
+          //ALEX[[[
+          // ushort* row = total_similarity2.ptr<ushort>(r);
+          int* row = total_similarity2.ptr<int>(r);
+          //]]]ALEX
           for (int c = 0; c < total_similarity2.cols; ++c)
           {
             int score = row[c];
